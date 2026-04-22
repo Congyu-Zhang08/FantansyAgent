@@ -1,6 +1,8 @@
 """End-to-end orchestrator test with the fake backend."""
 from __future__ import annotations
 
+import pytest
+
 from fantasy_agent import orchestrator
 from fantasy_agent.state import Project
 
@@ -81,3 +83,84 @@ def test_next_chapter_number(fake_agents, project_root):
     assert orchestrator.next_chapter_number(project) == 1
     orchestrator.write_chapter(project, fake_agents, 1, max_revisions=0)
     assert orchestrator.next_chapter_number(project) == 2
+
+
+# --- Failure-mode tests ------------------------------------------------------
+
+
+def _patch_route(fake, predicate, replacement):
+    """Override the fake's _route to substitute a response when predicate matches."""
+    original = fake._route
+
+    def patched(system_text, user_text):
+        if predicate(system_text):
+            return replacement
+        return original(system_text, user_text)
+
+    fake._route = patched
+
+
+def test_write_chapter_recovers_from_broken_editor_json(fake_agents, project_root):
+    """If the editor returns garbage, we fall back to approve and keep going."""
+    project = Project(project_root, "demo")
+    orchestrator.bootstrap(project, fake_agents, "A test premise.")
+
+    # Make the editor return something that is not JSON at all.
+    _patch_route(
+        fake_agents["editor"].backend,
+        lambda s: "You are a developmental editor" in s,
+        "Sure! Here's my critique: this draft is fantastic.",
+    )
+
+    # Should not raise.
+    prose = orchestrator.write_chapter(project, fake_agents, 1, max_revisions=2)
+
+    assert project.read_chapter(1) is not None
+    assert len(prose.split()) > 100
+    # Continuity + summary still ran.
+    assert project.read_summaries()
+    assert project.read_facts()
+
+
+def test_write_chapter_recovers_from_broken_continuity_json(fake_agents, project_root):
+    """If the continuity agent returns garbage, the chapter is still saved."""
+    project = Project(project_root, "demo")
+    orchestrator.bootstrap(project, fake_agents, "A test premise.")
+
+    _patch_route(
+        fake_agents["continuity"].backend,
+        lambda s: "You are a continuity keeper" in s,
+        "I cannot extract facts right now.",
+    )
+
+    orchestrator.write_chapter(project, fake_agents, 1, max_revisions=0)
+
+    assert project.read_chapter(1) is not None
+    assert project.read_facts() == []  # graceful empty, not a crash
+
+
+def test_draft_persisted_before_editor_runs(fake_agents, project_root, monkeypatch):
+    """If the editor crashes hard, the writer's draft is already on disk."""
+    project = Project(project_root, "demo")
+    orchestrator.bootstrap(project, fake_agents, "A test premise.")
+
+    fake_editor_backend = fake_agents["editor"].backend
+    real_generate = fake_editor_backend.generate
+
+    def explode_when_called_as_editor(*, system, **kwargs):
+        is_editor = any("You are a developmental editor" in b.text for b in system)
+        if is_editor:
+            # Verify chapter 1 already exists when editor is invoked.
+            assert project.read_chapter(1) is not None, \
+                "draft must be persisted before editor runs"
+            raise RuntimeError("simulated unrecoverable editor crash")
+        return real_generate(system=system, **kwargs)
+
+    monkeypatch.setattr(fake_editor_backend, "generate", explode_when_called_as_editor)
+
+    # _safe_call only catches parse errors; a RuntimeError still propagates.
+    with pytest.raises(RuntimeError, match="simulated"):
+        orchestrator.write_chapter(project, fake_agents, 1, max_revisions=1)
+
+    # Even though the run failed, the draft survived.
+    assert project.read_chapter(1) is not None
