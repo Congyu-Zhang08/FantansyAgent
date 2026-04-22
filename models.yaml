@@ -1,0 +1,49 @@
+# Per-agent backend and model configuration.
+# Swap providers by editing this file — no code changes required.
+#
+# Supported backends: "anthropic" (native SDK), "litellm" (universal adapter).
+# LiteLLM model strings: see https://docs.litellm.ai/docs/providers
+#   e.g. "openai/gpt-4o", "together_ai/Qwen/Qwen2.5-72B-Instruct",
+#        "groq/llama-3.3-70b-versatile", "ollama/qwen2.5:14b"
+
+worldbuilder:
+  backend: anthropic
+  model: claude-sonnet-4-6
+  max_tokens: 16000
+  effort: high
+
+plotter:
+  backend: anthropic
+  model: claude-sonnet-4-6
+  max_tokens: 8000
+  effort: high
+
+character:
+  backend: anthropic
+  model: claude-sonnet-4-6
+  max_tokens: 4000
+
+writer:
+  backend: anthropic
+  model: claude-sonnet-4-6
+  max_tokens: 8000
+  cache: true
+
+editor:
+  backend: anthropic
+  model: claude-opus-4-7
+  max_tokens: 2000
+  cache: true
+  effort: medium
+
+continuity:
+  backend: anthropic
+  model: claude-haiku-4-5
+  max_tokens: 1500
+  effort: low
+
+# Example: route writer to an open-source model via Together
+# writer:
+#   backend: litellm
+#   model: together_ai/Qwen/Qwen2.5-72B-Instruct
+#   max_tokens: 8000
