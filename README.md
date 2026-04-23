@@ -56,7 +56,7 @@ ANTHROPIC_API_KEY=sk-ant-...your-key-here...
 pytest tests/
 ```
 
-You should see `24 passed`. This proves the wiring works without spending a
+You should see `56 passed`. This proves the wiring works without spending a
 cent on the API. If this fails, fix it before continuing.
 
 ### 6. Bootstrap a novel project
@@ -114,7 +114,28 @@ config.
 
 Look at `projects/my-novel/chapters/01.md` — that's your chapter.
 
-### 8. Write more chapters
+### 8. Edit the chapter (this is the point)
+
+**The draft is a starting point, not the final product.** Open
+`projects/my-novel/chapters/01.md` in your editor and rewrite anything:
+fix dialogue, tone down prose, change plot details, cut whole scenes.
+
+Your edits become canon. The next time you run `write-chapter`, the system
+detects that you changed chapter 1 (via file mtime), regenerates the
+chapter 1 summary and continuity facts from your edited version, and
+*then* writes chapter 2 using your version as context. The AI's original
+draft is gone; your version is what the rest of the novel is built on.
+
+You don't need any special command for this. Just edit and keep going:
+
+```bash
+# ...you rewrote chapters/01.md by hand...
+fantasy-agent write-chapter my-novel      # writes chapter 2
+#   ↑ output includes "Chapter 01 was edited since last index;
+#     reindexing..." before the new chapter is drafted.
+```
+
+### 9. Write more chapters
 
 Just run the same command again — it will pick up where you left off:
 
@@ -130,7 +151,39 @@ Each new chapter sees:
 - The canonical facts established so far, filtered to what's relevant
 - The tail of the previous chapter (last ~400 words for narrative continuity)
 
-### 9. Check progress
+All of which are rebuilt from **whatever is currently on disk**, not from
+the AI's original drafts. Edit at any time.
+
+### 9b. Avoid wasted indexing if you always edit
+
+Indexing a chapter (extracting facts + writing the summary) costs ~$0.01–0.03.
+If you always plan to rewrite the chapter anyway, it's wasteful to index
+the AI's draft first, then re-index after your edits. Use `--hold`:
+
+```bash
+fantasy-agent write-chapter my-novel --hold
+# AI drafts chapter 2, saves it, but does NOT extract facts or write a summary.
+# "Held (not indexed)" is printed at the end.
+
+# You rewrite chapters/02.md by hand.
+
+fantasy-agent approve-chapter my-novel
+# Now the facts and summary are built from YOUR edited version, just once.
+```
+
+Without `--hold` this costs 2 indexing calls; with `--hold` it costs 1.
+
+### 9c. Manual reindex (rarely needed)
+
+`write-chapter` auto-detects edits, so manual reindexing is rarely needed.
+But if mtimes can't be trusted (e.g. after `git checkout`), force it:
+
+```bash
+fantasy-agent reindex my-novel --chapter 3   # one chapter
+fantasy-agent reindex my-novel               # every chapter
+```
+
+### 10. Check progress
 
 ```bash
 fantasy-agent status my-novel
@@ -144,7 +197,7 @@ Project: my-novel
   Next: Chapter 4 — The Bloodline Revealed
 ```
 
-### 10. Read the result
+### 11. Read the result
 
 Each `chapters/NN.md` is plain Markdown — open in any editor or paste them
 together into one document.
@@ -244,15 +297,16 @@ fantasy-agent write-chapter my-novel      # continues from wherever you left off
 
 ### Reindex after editing
 
-If you hand-edit a chapter file outside the tool, the stored summary and
-facts become stale. Rebuild them:
+You almost never need this — `write-chapter` auto-detects edited chapters
+(via file mtime) and rebuilds their summaries and facts before drafting
+the next one. The one case where you do need a manual reindex is when
+mtimes don't reflect reality (e.g. after `git checkout` or after
+rsyncing the project from another machine):
 
 ```bash
-fantasy-agent reindex my-novel
+fantasy-agent reindex my-novel --chapter 3   # just chapter 3
+fantasy-agent reindex my-novel               # every chapter
 ```
-
-This wipes `continuity.jsonl` and `summaries/*.md`, then regenerates them
-from every chapter currently on disk.
 
 ---
 

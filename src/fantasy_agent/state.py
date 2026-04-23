@@ -145,6 +145,19 @@ class Project:
             for fact in facts:
                 f.write(fact.model_dump_json() + "\n")
 
+    def remove_facts_for_chapter(self, chapter_number: int) -> None:
+        """Drop every fact tagged with `chapter_number` from continuity.jsonl.
+
+        Used when re-indexing a single chapter whose prose changed, so stale
+        facts from the pre-edit version are cleared before the new extraction
+        appends replacements. Other chapters' facts are left untouched.
+        """
+        if not self.continuity_path.exists():
+            return
+        kept = [f for f in self.read_facts() if f.chapter != chapter_number]
+        body = "\n".join(f.model_dump_json() for f in kept)
+        self.continuity_path.write_text(body + ("\n" if kept else ""))
+
     def read_facts(self) -> list[Fact]:
         if not self.continuity_path.exists():
             return []

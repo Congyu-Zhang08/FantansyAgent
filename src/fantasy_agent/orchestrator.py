@@ -124,9 +124,9 @@ def index_existing_chapter(
 ) -> None:
     """Extract canonical facts and write a summary for a chapter already on disk.
 
-    Used after importing user-provided chapters so future chapters have the
-    right continuity context. Idempotent-ish: running it twice appends the
-    facts twice (the continuity file is append-only). Tests cover this.
+    Appends facts and writes (overwriting) the summary file. If the chapter
+    was previously indexed, old facts remain in continuity.jsonl — use
+    `reindex_chapter` to replace them instead.
     """
     prose = project.read_chapter(chapter_number)
     if prose is None:
@@ -149,27 +149,83 @@ def index_existing_chapter(
     project.write_summary(chapter_number, summary)
 
 
+def reindex_chapter(
+    project: Project, agents: dict[str, AgentConfig], chapter_number: int
+) -> None:
+    """Re-index a single chapter: drop its old facts + summary, regenerate from disk.
+
+    This is the primitive that makes user edits propagate to future chapters.
+    When a user rewrites `chapters/03.md`, calling reindex_chapter(.., 3)
+    rebuilds the summary and continuity facts to match the edited prose,
+    without touching any other chapter's state.
+    """
+    project.remove_facts_for_chapter(chapter_number)
+    summary_path = project.summaries_dir / f"{chapter_number:02d}.md"
+    if summary_path.exists():
+        summary_path.unlink()
+    index_existing_chapter(project, agents, chapter_number)
+
+
+def _chapter_numbers_on_disk(project: Project) -> list[int]:
+    return sorted(
+        int(p.stem) for p in project.chapters_dir.glob("*.md") if p.stem.isdigit()
+    )
+
+
+def sync_stale_indexes(
+    project: Project,
+    agents: dict[str, AgentConfig],
+    up_to_chapter: int,
+    on_progress: Callable[[str], None] | None = None,
+) -> list[int]:
+    """Re-index any chapters < `up_to_chapter` whose prose is newer than their summary.
+
+    Compares file mtimes:
+    - If `chapters/M.md` exists but `summaries/M.md` does not, M was never
+      indexed (e.g. generated with --hold); index it.
+    - If `chapters/M.md` is newer than `summaries/M.md`, the user edited the
+      chapter since it was last indexed; re-index to match.
+
+    Called automatically at the top of `write_chapter` so user edits to any
+    prior chapter propagate to the writer's context without ceremony. Returns
+    the chapter numbers that were reindexed (for tests / reporting).
+    """
+    progress = on_progress or (lambda _msg: None)
+    reindexed: list[int] = []
+
+    for n in _chapter_numbers_on_disk(project):
+        if n >= up_to_chapter:
+            continue
+        chapter_path = project.chapters_dir / f"{n:02d}.md"
+        summary_path = project.summaries_dir / f"{n:02d}.md"
+        if not summary_path.exists():
+            progress(f"Chapter {n:02d} not yet indexed; indexing now…")
+            index_existing_chapter(project, agents, n)
+            reindexed.append(n)
+        elif chapter_path.stat().st_mtime > summary_path.stat().st_mtime:
+            progress(f"Chapter {n:02d} was edited since last index; reindexing…")
+            reindex_chapter(project, agents, n)
+            reindexed.append(n)
+
+    return reindexed
+
+
 def reindex(
     project: Project, agents: dict[str, AgentConfig],
     on_progress: Callable[[str], None] | None = None,
 ) -> None:
-    """Wipe and rebuild summaries + continuity facts from the chapters on disk.
+    """Wipe and rebuild summaries + continuity facts from every chapter on disk.
 
-    Useful if you've hand-edited chapter files or added them outside of
-    `write-chapter` and want future chapters to see the updated state.
+    The nuclear option: forces a full re-index even for chapters whose
+    summaries look fresh. Use when you've done something the mtime check
+    can't see (e.g. hand-edited continuity.jsonl, changed prompts).
+    For single-chapter refresh, use `reindex_chapter`; for auto-detection,
+    that's built into `write_chapter`.
     """
     progress = on_progress or (lambda _msg: None)
-
-    # Wipe existing facts and summaries so we don't double-count.
-    project.continuity_path.write_text("")
-    for p in project.summaries_dir.glob("*.md"):
-        p.unlink()
-
-    for n in range(1, project.chapter_count() + 1):
-        if project.read_chapter(n) is None:
-            continue
+    for n in _chapter_numbers_on_disk(project):
         progress(f"Reindexing chapter {n:02d}…")
-        index_existing_chapter(project, agents, n)
+        reindex_chapter(project, agents, n)
 
 
 def write_chapter(
@@ -177,14 +233,34 @@ def write_chapter(
     agents: dict[str, AgentConfig],
     chapter_number: int,
     max_revisions: int = 2,
+    *,
+    hold: bool = False,
+    on_progress: Callable[[str], None] | None = None,
 ) -> str:
-    """Draft → persist → edit → revise (up to N) → extract facts → summarize.
+    """Draft → persist → edit → revise (up to N) → index (unless held).
+
+    Before drafting, auto-sync any prior chapters the user edited since they
+    were last indexed. This means the writer sees the user's edits as canon,
+    not the AI's original drafts.
 
     The draft is written to disk *before* the editor runs, so a crash or
-    malformed editor response never loses the writer's work. The editor and
+    malformed editor response never loses the writer's work. Editor and
     continuity calls are wrapped in `_safe_call` so a malformed JSON response
     falls back to a safe default rather than killing the run.
+
+    With `hold=True`, the chapter is drafted and edited but NOT indexed
+    (no summary written, no facts extracted). Use this when you plan to
+    rewrite the chapter yourself before it becomes canon. Follow up with
+    `approve_chapter(project, agents, N)` once you're satisfied with the
+    final version.
     """
+    progress = on_progress or (lambda _msg: None)
+
+    # Auto-sync stale summaries/facts from earlier chapters the user edited.
+    reindexed = sync_stale_indexes(project, agents, chapter_number, progress)
+    if reindexed:
+        progress(f"Synced {len(reindexed)} edited chapter(s) before writing.")
+
     writer_ctx = build_writer_context(project, chapter_number)
 
     draft = writer.run(agents["writer"], writer_ctx)
@@ -208,9 +284,27 @@ def write_chapter(
         )
         project.write_chapter(chapter_number, draft)
 
+    if hold:
+        progress(
+            f"Chapter {chapter_number:02d} held (not indexed). "
+            f"Edit chapters/{chapter_number:02d}.md, then run `approve-chapter`."
+        )
+        return draft
+
     # Post-write: extract facts and summarize, so future chapters have
     # bounded context.
-    cont_ctx = build_continuity_context(chapter_number, draft)
+    _index_from_prose(project, agents, chapter_number, draft)
+    return draft
+
+
+def _index_from_prose(
+    project: Project,
+    agents: dict[str, AgentConfig],
+    chapter_number: int,
+    prose: str,
+) -> None:
+    """Shared post-write indexing: extract facts, write summary."""
+    cont_ctx = build_continuity_context(chapter_number, prose)
     facts = _safe_call(
         f"continuity[ch{chapter_number}]",
         lambda: continuity.run(agents["continuity"], cont_ctx),
@@ -220,13 +314,28 @@ def write_chapter(
         project.append_facts(facts)
 
     summary = summarizer.run(
-        agents["continuity"],  # reuse cheap backend; summarizer is mechanical
+        agents["continuity"],
         chapter_number=chapter_number,
-        prose=draft,
+        prose=prose,
     )
     project.write_summary(chapter_number, summary)
 
-    return draft
+
+def approve_chapter(
+    project: Project,
+    agents: dict[str, AgentConfig],
+    chapter_number: int,
+) -> None:
+    """Mark a chapter's on-disk version as canon: extract facts, write summary.
+
+    Idempotent: if the chapter was already indexed (e.g. it was generated
+    without `--hold`), this drops the old facts/summary and rebuilds from
+    whatever is currently on disk. That's exactly what you want if you
+    edited the chapter by hand — your version replaces the AI's.
+    """
+    if project.read_chapter(chapter_number) is None:
+        raise ValueError(f"no chapter {chapter_number} to approve")
+    reindex_chapter(project, agents, chapter_number)
 
 
 def next_chapter_number(project: Project) -> int:
