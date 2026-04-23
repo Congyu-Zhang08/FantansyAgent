@@ -172,16 +172,43 @@ def _character_to_md(c: CharacterSheet) -> str:
 
 
 def _character_from_md(text: str) -> CharacterSheet:
+    """Parse a character sheet from markdown.
+
+    Strict path: H1 for name, `**Role:**` line, H2 sections for Description,
+    Motivations, Voice, Arc. This is what `_character_to_md` writes.
+
+    Fallback for user-provided files: if no H2 sections are found, the
+    entire body below the H1 (minus the Role line) goes into `description`,
+    with empty strings for the other fields. Lets users bring loose
+    character docs without having to restructure them.
+    """
     sections = _parse_sections(text)
     name = sections.get("_title", "Unknown")
     role_match = re.search(r"\*\*Role:\*\*\s*(.+)", text)
+    role = role_match.group(1).strip() if role_match else "supporting"
+
+    structured_keys = {"Description", "Motivations", "Voice", "Arc"}
+    has_structured = bool(structured_keys & set(sections.keys()))
+    if has_structured:
+        return CharacterSheet(
+            name=name,
+            role=role,
+            description=sections.get("Description", "").strip(),
+            motivations=sections.get("Motivations", "").strip(),
+            voice=sections.get("Voice", "").strip(),
+            arc=sections.get("Arc", "").strip(),
+        )
+
+    # Loose fallback: strip the H1 line and the Role line; use the rest as prose.
+    body = re.sub(r"^#\s+.+\n", "", text, count=1)
+    body = re.sub(r"\*\*Role:\*\*\s*.+\n?", "", body, count=1)
     return CharacterSheet(
         name=name,
-        role=(role_match.group(1).strip() if role_match else "supporting"),
-        description=sections.get("Description", "").strip(),
-        motivations=sections.get("Motivations", "").strip(),
-        voice=sections.get("Voice", "").strip(),
-        arc=sections.get("Arc", "").strip(),
+        role=role,
+        description=body.strip(),
+        motivations="",
+        voice="",
+        arc="",
     )
 
 

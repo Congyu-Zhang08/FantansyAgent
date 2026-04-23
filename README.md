@@ -151,6 +151,111 @@ together into one document.
 
 ---
 
+## Bring your own world, characters, or existing chapters
+
+If you already have a world, character cast, outline, or a partially-written
+novel, you don't have to start from scratch. Pass any combination of the
+`--world`, `--outline`, `--characters`, `--chapters` flags to `init` and the
+tool will use your files instead of generating that piece.
+
+### Example: continue a novel you started
+
+```bash
+fantasy-agent init my-novel \
+    --premise  "A cartographer discovers her maps redraw themselves." \
+    --world    ./drafts/world-bible.md \
+    --outline  ./drafts/plot.md \
+    --characters ./drafts/characters/ \
+    --chapters ./drafts/chapters/
+```
+
+For each existing chapter you import, the **continuity agent extracts
+canonical facts** and the **summarizer writes a ~200-word recap**. Without
+this indexing, chapter N+1 would have no idea what happened in chapters 1…N
+and would cheerfully contradict them. (Costs a small amount of API per
+chapter; add `--skip-indexing` to skip it if you don't care about
+consistency.)
+
+After import, just write the next chapter:
+
+```bash
+fantasy-agent write-chapter my-novel      # continues from wherever you left off
+```
+
+### File format expectations
+
+- **`--premise`** — either a short sentence in quotes, or a path to a `.md`
+  file containing the premise. Optional if `--outline` provides one.
+- **`--world`** — any markdown file. Content is passed through verbatim.
+- **`--outline`** — markdown file in the tool's format:
+  ```markdown
+  # Outline
+
+  ## Premise
+  One-paragraph premise here.
+
+  ## Chapters
+
+  ### Chapter 1: The Anomaly
+  Two-to-three-sentence synopsis.
+
+  **Beats:**
+  - Lira wakes to a changed map — inciting incident
+  - She consults her teacher
+
+  ### Chapter 2: The Bloodline
+  ...
+  ```
+- **`--characters`** — either:
+  - A directory containing one `.md` file per character, OR
+  - A single `.md` file with `# Name` for each character.
+
+  Strict format (what the tool writes) has H2 sections for Description,
+  Motivations, Voice, Arc:
+  ```markdown
+  # Lira Venn
+
+  **Role:** protagonist
+
+  ## Description
+  A cartographer from Dunmire in her late twenties.
+
+  ## Motivations
+  Wants to understand the anomaly at any cost.
+
+  ## Voice
+  Terse, precise, occasionally sardonic.
+
+  ## Arc
+  From detached observer to reluctant advocate.
+  ```
+  Loose format also works — if your character doc just has a name header and
+  a block of prose, the prose becomes the description and the other fields
+  are left empty:
+  ```markdown
+  # Lira Venn
+
+  A 29-year-old cartographer haunted by her mother's disappearance.
+  Sardonic, precise, and slowly losing her certainty.
+  ```
+- **`--chapters`** — a directory of existing chapter files. Chapter numbers
+  are extracted from the first run of digits in the filename. All of these
+  work: `01.md`, `ch01.md`, `chapter-1.md`, `chapter_02.md`.
+
+### Reindex after editing
+
+If you hand-edit a chapter file outside the tool, the stored summary and
+facts become stale. Rebuild them:
+
+```bash
+fantasy-agent reindex my-novel
+```
+
+This wipes `continuity.jsonl` and `summaries/*.md`, then regenerates them
+from every chapter currently on disk.
+
+---
+
 ## Customizing the agents
 
 Open `models.yaml`. Each agent has its own backend, model, token budget, and

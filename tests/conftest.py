@@ -12,10 +12,14 @@ from .fake_backend import FakeBackend
 
 @pytest.fixture
 def fake_agents() -> dict[str, AgentConfig]:
-    """A full agent config dict wired up to the fake backend."""
-    backend = FakeBackend()
+    """A full agent config dict wired up to the fake backend.
+
+    Each agent gets its OWN FakeBackend instance, so tests can inspect
+    per-agent call logs (`fake_agents["writer"].backend.calls`) without
+    mixing calls from other agents.
+    """
     return {
-        name: AgentConfig(backend=backend, max_tokens=2000)
+        name: AgentConfig(backend=FakeBackend(), max_tokens=2000)
         for name in ("worldbuilder", "plotter", "character", "writer", "editor", "continuity")
     }
 
